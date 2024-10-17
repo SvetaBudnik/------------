@@ -12,7 +12,6 @@ from scipy.optimize import minimize
 
 import pandas as pd
 
-import time
 
 # Параметры для работы
 
@@ -55,14 +54,14 @@ def gen_rand_laplas(n_lap: int, theta: float = 0.0, lamb: float = 1.0) -> float:
     global rng
 
     list_rand = rng.random((n_lap,))
-    
+
     res = 1.0
     for item in list_rand:
         if item <= (1 / 2):
             res *= 2 * item
         else:
             res /= 2 * (1 - item)
-    
+
     return np.log(res) * lamb + theta
 
 
@@ -80,7 +79,7 @@ def gen_full_laplas(
         ndarray[float64]: множество значений полученной выборки
     """
     global N_net
-    
+
     res = [gen_rand_laplas(N_net, theta=theta, lamb=lamb) for _ in range(count)]
     return np.asarray(res)
 
@@ -124,36 +123,43 @@ def ploat_graphics(
         scattened (np.ndarray[np.float64]): массив значений из грязного распределения
     """
     # Сгруппировать данные и просуммировать их по группам
-    count_of_groups = 25
+    count_of_groups = 125
     lowest_value = min(clean.min(), scattener.min(), scattened.min())
     highest_value = max(clean.max(), scattener.max(), scattened.max()) + 1
 
-    x_values = np.arange(
-        lowest_value, highest_value, (highest_value - lowest_value) / count_of_groups
-    )
+    x_values = np.linspace(lowest_value, highest_value, count_of_groups)
     clean_y = np.zeros_like(x_values)
     scattener_y = np.zeros_like(x_values)
     scattened_y = np.zeros_like(x_values)
 
-    # Ещё больше неоптимизированной фигни))))
-    for i in range(clean.size):
-        val_clean = clean[i]
-        for j in range(1, x_values.size):
-            if val_clean < x_values[j]:
-                clean_y[j - 1] += 1
-                break
+    clean.sort()
+    scattener.sort()
+    scattened.sort()
 
-        val_scattener = scattener[i]
-        for j in range(1, x_values.size):
-            if val_scattener < x_values[j]:
-                scattener_y[j - 1] += 1
-                break
+    # ОПАСНО! Такая реализация может добавлять неверные значения при малой выборке и большом числе групп!!
+    i = 1
+    for el in clean:
+        if el <= x_values[i]:
+            clean_y[i - 1] += 1
+        else:
+            i += 1
+            clean_y[i - 1] += 1
 
-        val_scattened = scattened[i]
-        for j in range(1, x_values.size):
-            if val_scattened < x_values[j]:
-                scattened_y[j - 1] += 1
-                break
+    i = 1
+    for el in scattener:
+        if el <= x_values[i]:
+            scattener_y[i - 1] += 1
+        else:
+            i += 1
+            scattener_y[i - 1] += 1
+
+    i = 1
+    for el in scattened:
+        if el <= x_values[i]:
+            scattened_y[i - 1] += 1
+        else:
+            i += 1
+            scattened_y[i - 1] += 1
 
     # Провести масштабирование графиков
     max_y = clean_y.max()
@@ -177,39 +183,27 @@ def ploat_graphics(
     axes.plot(X_, cl_smooth, label="чистое", linestyle="--", color="red")
     axes.plot(X_, scer_smooth, label="загрязняющее", linestyle="-.", color="blue")
     axes.plot(X_, sced_smooth, label="загрязнённое", linestyle="-", color="green")
+    axes.plot([0, 0], [0.0, 1.1], label="Центр", color="purple")
     axes.legend()
 
-    # plt.show()
+    plt.show()
 
 
 # вычисление выборочных характеристик: среднего арифметического, выборочной медианы, дисперсии, коэффициентов асимметрии и эксцесса;
 
-size = 80000
+size = 800000
 
 print(f"Размер выборки: {size} элементов...")
 
 print("Строим чистое распределение...")
-t1 = time.time()
 clean = gen_full_laplas(size)
-t2 = time.time()
-print("Time=%s" % (t2 - t1))
 
 print("Строим загрязняющее распределение...")
-t1 = time.time()
-scattener = gen_full_laplas(size, theta=2)
-t2 = time.time()
-print("Time=%s" % (t2 - t1))
+scattener = gen_full_laplas(size, theta=10)
 
 print("Строим загрязнённое распределение...")
-t1 = time.time()
 scattened = get_scattened_laplas(clean, scattener, 0.2)
-t2 = time.time()
-print("Time=%s" % (t2 - t1))
 
 print("Делаем графики...")
-t1 = time.time()
 ploat_graphics(clean, scattener, scattened)
-t2 = time.time()
-print("Time=%s" % (t2 - t1))
 
-plt.show()
