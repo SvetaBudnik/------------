@@ -1,6 +1,7 @@
 import math
 import statistics
 import matplotlib.pyplot as plt
+from scipy.interpolate import make_interp_spline
 
 import numpy as np
 
@@ -9,102 +10,206 @@ from scipy import integrate
 from scipy.integrate import quad
 from scipy.optimize import minimize
 
+import pandas as pd
 
+import time
 
 # Параметры для работы
 
-kol_rand = 1000000 # количество которое хочешь сгенерить
+kol_rand = 1000000  # количество которое хочешь сгенерить
 # kol_rand = 500 # количество которое хочешь сгенерить
-eps = 0.4 # Эпсилон
+eps = 0.4  # Эпсилон
+rng = np.random.default_rng(
+    12345
+)  # Генератор рандомных чисел с фиксированным сидом (для повторяемости результатов)
 
 # Параметры для чистого распределения
 
-N_net = 2 # Параметр распределения
-l_net = 1 # Масштаб (лямбда)
-O_net = 0 # Смещение (Тетта)
-disp_net = 2 * N_net # Дисперсия
-excesses_net = 3 / N_net # Эксцесс
+N_net = 4  # Параметр распределения
+l_net = 1  # Масштаб (лямбда)
+O_net = 0  # Смещение (Тетта)
+disp_net = 2 * N_net  # Дисперсия
+excesses_net = 3 / N_net  # Эксцесс
 
 # Параметры для шума
 
-N_scattered = 2 # Параметр распределения
-l_scattered = 2 # Масштаб (лямбда)
-O_scattered = 4 # Смещение (Тетта)
-disp_scattered = 2 * N_scattered * l_scattered**2 # Дисперсия
-excesses_scattered = 3/N_scattered # Эксцесс
+N_scattered = 4  # Параметр распределения
+l_scattered = 2  # Масштаб (лямбда)
+O_scattered = 0  # Смещение (Тетта)
+disp_scattered = 2 * N_scattered * l_scattered**2  # Дисперсия
+excesses_scattered = 3 / N_scattered  # Эксцесс
 
 
-def gen_rand_laplas(n_lap: int) -> float:
+def gen_rand_laplas(n_lap: int, theta: float = 0.0, lamb: float = 1.0) -> float:
     """
-    Генератор случайной величины, соответствующей обобщенному распределению Лапласа.
+    Генератор случайной величины, соответствующей обобщенному распределению Лапласа, с возможностью задания сдвига и масштабирования
 
-    Параметры
-    ----------
-    n_lap : int
-        Натуральное число, соответствющее количеству случайных величин.
+    Args:
+        n_lap (int): Натуральное число, соответствющее количеству случайных величин. Является параметром обобщённого распределения Лапласа `n`
+        theta (float, optional): параметр сдвига распределения тэтта. По умолчанию 0.0
+        lamb (float, optional): параметр масштабироваиня сдвига лямбда. По умолчанию 1.0
 
-    Возвращает
-    ----------
-    out : float
-        Случайная величина, соответствующая обобщенному распределению Лапласа.
+    Returns:
+        float: Случайная величина, соответствующая обобщенному распределению Лапласа.
     """
-    list_rand = np.random.rand(n_lap)
-    top_mult = 1
-    down_mult = 1
+    global rng
+
+    list_rand = rng.random((n_lap,))
+    
+    res = 1.0
     for item in list_rand:
-        if item <= 1/2:
-            top_mult = top_mult * 2 * item
-        elif item > 1/2:
-            down_mult = down_mult * 2 * (1 - item)
-    return np.log(top_mult / down_mult)
+        if item <= (1 / 2):
+            res *= 2 * item
+        else:
+            res /= 2 * (1 - item)
+    
+    return np.log(res) * lamb + theta
 
 
-def mix_gen_rand_laplas(n_net: int, n_scattered: int, l: float, O: float) -> float:
+def gen_full_laplas(
+    count: int, theta: float = 0.0, lamb: float = 1.0
+) -> np.ndarray[np.float64]:
+    """Генератор множества случайных величин по распределению Лапласа
+
+    Args:
+        count (int): размер выборки случайных чисел по данному распределению
+        theta (float, optional): параметр сдвига распределения тэтта. По умолчанию 0.0
+        lamb (float, optional): параметр масштабироваиня сдвига лямбда. По умолчанию 1.0
+
+    Returns:
+        ndarray[float64]: множество значений полученной выборки
     """
-    Генератор случайной величины соответствующей обобщенному смешанному распределению Лапласа.
+    global N_net
+    
+    res = [gen_rand_laplas(N_net, theta=theta, lamb=lamb) for _ in range(count)]
+    return np.asarray(res)
 
-    Параметры
-    ----------
-    n_net : int
-        Количество случайных величин в чистом распредении.
-    n_scattered : int
-        Количество случайных величин в загрязненном распредении.
-    l : float
-        Масштаб распределения.
-    O : float
-        Смещение распределения.
 
-    Возвращает
-    ----------
-    out : float
-        Случайная величина, соответствующая обобщенному обобщенному смешанному распределению Лапласу.
+def get_scattened_laplas(
+    clean: np.ndarray[np.float64], scattener: np.ndarray[np.float64], eps: float
+) -> np.ndarray[np.float64]:
+    """Соединяет чистое и загрязняющее распределения в единое загрязнённое
+
+    Args:
+        clean (np.ndarray[np.float64]): множество случайных величин из чистого распределения
+        scattener (np.ndarray[np.float64]): множество случайных величин из загрязняющего распределения (должно совпадать по размеру с чистым)
+        eps (float): коэффициент загрязнения (0 <= `eps` <= 0.5)
+
+    Returns:
+        np.ndarray[np.float64]: полученное загрязнённое распределение
     """
-    rand_eps = np.random.rand(1)
-    top_mult = 1
-    down_mult = 1
-    if rand_eps < 1 - eps:
-        list_rand = np.random.rand(n_net)
-        for item in list_rand:
-            if item <= 1/2:
-                top_mult = top_mult * 2 * item
-            elif item > 1/2:
-                down_mult = down_mult * 2 * (1 - item)
-        return np.log(top_mult/down_mult)
-    else:
-        list_rand = np.random.rand(n_scattered)
-        for item in list_rand:
-            if item <= 1/2:
-                top_mult = top_mult * 2 * item
-            elif item > 1/2:
-                down_mult = down_mult * 2 * (1 - item)
-        # return (np.log(top_mult/down_mult) - O)/l
-        # return (np.log(top_mult/down_mult) + O) * l
-        return np.log(top_mult/down_mult) * l + O
+    global rng
+    res = np.zeros_like(clean)
+    rand = rng.random((clean.size,))
+
+    for ind in range(res.size):
+        if rand[ind] <= (1 - eps):
+            res[ind] = clean[ind]
+        else:
+            res[ind] = scattener[ind]
+
+    return res
+
+
+def ploat_graphics(
+    clean: np.ndarray[np.float64],
+    scattener: np.ndarray[np.float64],
+    scattened: np.ndarray[np.float64],
+):
+    """Выводит графики сгенерированных распределений на экран (приводя размеры к единичному по графику `clean`)
+
+    Args:
+        clean (np.ndarray[np.float64]): массив значений из чистого распределения
+        scattener (np.ndarray[np.float64]): массив значений из загрязняющего распределения
+        scattened (np.ndarray[np.float64]): массив значений из грязного распределения
+    """
+    # Сгруппировать данные и просуммировать их по группам
+    count_of_groups = 25
+    lowest_value = min(clean.min(), scattener.min(), scattened.min())
+    highest_value = max(clean.max(), scattener.max(), scattened.max()) + 1
+
+    x_values = np.arange(
+        lowest_value, highest_value, (highest_value - lowest_value) / count_of_groups
+    )
+    clean_y = np.zeros_like(x_values)
+    scattener_y = np.zeros_like(x_values)
+    scattened_y = np.zeros_like(x_values)
+
+    # Ещё больше неоптимизированной фигни))))
+    for i in range(clean.size):
+        val_clean = clean[i]
+        for j in range(1, x_values.size):
+            if val_clean < x_values[j]:
+                clean_y[j - 1] += 1
+                break
+
+        val_scattener = scattener[i]
+        for j in range(1, x_values.size):
+            if val_scattener < x_values[j]:
+                scattener_y[j - 1] += 1
+                break
+
+        val_scattened = scattened[i]
+        for j in range(1, x_values.size):
+            if val_scattened < x_values[j]:
+                scattened_y[j - 1] += 1
+                break
+
+    # Провести масштабирование графиков
+    max_y = clean_y.max()
+    clean_y = clean_y / max_y
+    scattener_y = scattener_y / max_y
+    scattened_y = scattened_y / max_y
+
+    # Интерполируем графики в сплайны
+    clean_spline = make_interp_spline(x_values, clean_y)
+    scattener_spline = make_interp_spline(x_values, scattener_y)
+    scattened_spline = make_interp_spline(x_values, scattened_y)
+
+    X_ = np.linspace(x_values.min(), x_values.max(), 1000)
+
+    cl_smooth = clean_spline(X_)
+    scer_smooth = scattener_spline(X_)
+    sced_smooth = scattened_spline(X_)
+
+    # Выводим полученные графики
+    fig, axes = plt.subplots()
+    axes.plot(X_, cl_smooth, label="чистое", linestyle="--", color="red")
+    axes.plot(X_, scer_smooth, label="загрязняющее", linestyle="-.", color="blue")
+    axes.plot(X_, sced_smooth, label="загрязнённое", linestyle="-", color="green")
+    axes.legend()
+
+    # plt.show()
+
 
 # вычисление выборочных характеристик: среднего арифметического, выборочной медианы, дисперсии, коэффициентов асимметрии и эксцесса;
 
+size = 80000
 
+print(f"Размер выборки: {size} элементов...")
 
+print("Строим чистое распределение...")
+t1 = time.time()
+clean = gen_full_laplas(size)
+t2 = time.time()
+print("Time=%s" % (t2 - t1))
 
+print("Строим загрязняющее распределение...")
+t1 = time.time()
+scattener = gen_full_laplas(size, theta=2)
+t2 = time.time()
+print("Time=%s" % (t2 - t1))
 
-import pandas as pd
+print("Строим загрязнённое распределение...")
+t1 = time.time()
+scattened = get_scattened_laplas(clean, scattener, 0.2)
+t2 = time.time()
+print("Time=%s" % (t2 - t1))
+
+print("Делаем графики...")
+t1 = time.time()
+ploat_graphics(clean, scattener, scattened)
+t2 = time.time()
+print("Time=%s" % (t2 - t1))
+
+plt.show()
