@@ -32,11 +32,11 @@ excesses_net = 3 / N_net  # Эксцесс
 
 # Параметры для шума
 
-N_scattered = 4  # Параметр распределения
-l_scattered = 2  # Масштаб (лямбда)
-O_scattered = 0  # Смещение (Тетта)
-disp_scattered = 2 * N_scattered * l_scattered**2  # Дисперсия
-excesses_scattered = 3 / N_scattered  # Эксцесс
+N_scatterer = 4  # Параметр распределения
+l_scatterer = 1  # Масштаб (лямбда). 1 по умолчанию
+O_scatterer = 10  # Смещение (Тетта). 0 по умолчанию
+disp_scatterer = 2 * N_scatterer * l_scatterer**2  # Дисперсия
+excesses_scatterer = 3 / N_scatterer  # Эксцесс
 
 
 def gen_rand_laplas(n_lap: int, theta: float = 0.0, lamb: float = 1.0) -> float:
@@ -191,19 +191,17 @@ def ploat_graphics(
 
 # вычисление выборочных характеристик: среднего арифметического, выборочной медианы, дисперсии, коэффициентов асимметрии и эксцесса;
 
-size = 800000
 
-print(f"Размер выборки: {size} элементов...")
+print(f"Размер выборки: {kol_rand} элементов...")
 
 print("Строим чистое распределение...")
-clean = gen_full_laplas(size)
+clean = gen_full_laplas(kol_rand)
 
 print("Строим загрязняющее распределение...")
-scattener = gen_full_laplas(size, theta=10)
+scattener = gen_full_laplas(kol_rand, theta=O_scatterer)
 
 print("Строим загрязнённое распределение...")
 scattened = get_scattened_laplas(clean, scattener, 0.2)
 
 print("Делаем графики...")
 ploat_graphics(clean, scattener, scattened)
-
